@@ -1,0 +1,33 @@
+name: flake-repro
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the test binary once
+        run: cargo test -p victory-gpu --lib warp_budget --no-run
+      - name: Run the warp_budget test 20 times
+        shell: pwsh
+        run: |
+          $fail = 0
+          for ($i = 1; $i -le 20; $i++) {
+            cargo test -p victory-gpu --lib warp_budget -- --nocapture 2>&1 | Out-Host
+            $code = $LASTEXITCODE
+            if ($code -ne 0) { $fail++ }
+            Write-Host "run $i exit=$code (failures so far: $fail)"
+          }
+          "warp_budget flake: $fail of 20 runs failed" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Write-Host "::notice::warp_budget flake: $fail of 20 runs failed"
+          exit 0
