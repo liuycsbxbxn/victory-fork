@@ -1,0 +1,41 @@
+name: flake-hunt
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hunt:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the test binary once
+        run: cargo test -p victory-gpu --lib --no-run
+      - name: Run the victory-gpu lib tests 10 times and count failures per test
+        shell: pwsh
+        run: |
+          $counts = @{}
+          for ($i = 1; $i -le 10; $i++) {
+            $out = cargo test -p victory-gpu --lib -- --test-threads=4 2>&1 | Out-String
+            $failed = ($out -split "`r?`n") | Where-Object { $_ -match '^test (\S+) \.\.\. FAILED' } | ForEach-Object { $matches[1] }
+            foreach ($t in $failed) { if ($counts.ContainsKey($t)) { $counts[$t] = $counts[$t] + 1 } else { $counts[$t] = 1 } }
+            Write-Host "run $i : $($failed.Count) failed"
+          }
+          Write-Host '=== per-test failure counts over 10 runs ==='
+          if ($counts.Count -eq 0) {
+            'flake-hunt: no test failed in 10 runs of victory-gpu lib' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            Write-Host '::notice::flake-hunt: no failures in 10 runs'
+          } else {
+            $rows = foreach ($e in ($counts.GetEnumerator() | Sort-Object Value -Descending)) { "| {0} | {1}/10 |" -f $e.Key, $e.Value }
+            (@('| test | failed |','|---|---|') + $rows) | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            $top = ($counts.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 5 | ForEach-Object { "$($_.Key)=$($_.Value)/10" }) -join '; '
+            Write-Host ("::notice::flake-hunt: " + $counts.Count + " distinct tests failed in 10 runs. Top: " + $top)
+          }
+          exit 0
